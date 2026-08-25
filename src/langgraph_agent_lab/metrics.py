@@ -79,4 +79,8 @@ def summarize_metrics(items: list[ScenarioMetric]) -> MetricsReport:
 def write_metrics(report: MetricsReport, output_path: str | Path) -> None:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report.model_dump(), indent=2, ensure_ascii=False), encoding="utf-8")
+    payload = json.dumps(report.model_dump(), indent=2, ensure_ascii=False)
+    # newline="\n" avoids Windows' text-mode CRLF translation, keeping line endings
+    # consistent with the rest of the repo (git diff --check flags mixed CRLF as
+    # "trailing whitespace" on every line otherwise).
+    path.write_text(payload, encoding="utf-8", newline="\n")

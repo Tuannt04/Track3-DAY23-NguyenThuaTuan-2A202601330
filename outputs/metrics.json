@@ -16,7 +16,7 @@
       "interrupt_count": 0,
       "approval_required": false,
       "approval_observed": false,
-      "latency_ms": 11279,
+      "latency_ms": 4422,
       "errors": []
     },
     {
@@ -29,7 +29,7 @@
       "interrupt_count": 0,
       "approval_required": false,
       "approval_observed": false,
-      "latency_ms": 2618,
+      "latency_ms": 2935,
       "errors": []
     },
     {
@@ -42,7 +42,7 @@
       "interrupt_count": 0,
       "approval_required": false,
       "approval_observed": false,
-      "latency_ms": 943,
+      "latency_ms": 1577,
       "errors": []
     },
     {
@@ -55,7 +55,7 @@
       "interrupt_count": 1,
       "approval_required": true,
       "approval_observed": true,
-      "latency_ms": 3220,
+      "latency_ms": 2843,
       "errors": []
     },
     {
@@ -68,7 +68,7 @@
       "interrupt_count": 0,
       "approval_required": false,
       "approval_observed": false,
-      "latency_ms": 3240,
+      "latency_ms": 3222,
       "errors": [
         "Attempt 1 failed or was flagged for retry (route=error).",
         "Attempt 2 failed or was flagged for retry (route=error)."
@@ -84,7 +84,7 @@
       "interrupt_count": 1,
       "approval_required": true,
       "approval_observed": true,
-      "latency_ms": 3257,
+      "latency_ms": 3162,
       "errors": []
     },
     {
@@ -97,7 +97,7 @@
       "interrupt_count": 0,
       "approval_required": false,
       "approval_observed": false,
-      "latency_ms": 838,
+      "latency_ms": 1078,
       "errors": [
         "Attempt 1 failed or was flagged for retry (route=error)."
       ]
@@ -112,7 +112,7 @@
       "interrupt_count": 1,
       "approval_required": true,
       "approval_observed": true,
-      "latency_ms": 2809,
+      "latency_ms": 3191,
       "errors": []
     },
     {
@@ -125,7 +125,7 @@
       "interrupt_count": 0,
       "approval_required": false,
       "approval_observed": false,
-      "latency_ms": 999,
+      "latency_ms": 810,
       "errors": []
     }
   ]
