@@ -39,7 +39,7 @@ class ApprovalDecision(BaseModel):
 
 
 class AgentState(TypedDict, total=False):
-    """LangGraph state. See the field-by-field reducer rationale in reports/lab_report.md §3."""
+    """LangGraph state. Field-by-field reducer rationale: reports/lab_report_template.md §3."""
 
     thread_id: str
     scenario_id: str
@@ -52,6 +52,7 @@ class AgentState(TypedDict, total=False):
     # Overwrite fields: each only reflects the latest decision, not a history —
     # history of the run is already captured by the append-only `events` log below.
     evaluation_result: str
+    judge_call_count: int
     pending_question: str | None
     proposed_action: str | None
     approval: dict[str, Any] | None

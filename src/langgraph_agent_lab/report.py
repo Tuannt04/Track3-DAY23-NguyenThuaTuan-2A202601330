@@ -117,8 +117,9 @@ def render_report(metrics: MetricsReport) -> str:
     )
     lines.append(
         "- Phát hiện bằng gì: `evaluate_node` kiểm tra kết quả tool gần nhất có chữ `ERROR` "
-        "không (heuristic, không dùng LLM cho case này — lý do ở mục 7), đánh dấu "
-        "`evaluation_result=\"needs_retry\"`."
+        "không (short-circuit heuristic, không tốn lời gọi LLM cho case rõ ràng này — chi "
+        "tiết ở mục 7). Với kết quả không có `ERROR`, LLM-as-judge mới là bên quyết định "
+        "thật `evaluation_result`."
     )
     lines.append("- Đi tiếp đâu: `evaluate -> retry -> tool` lặp lại, mỗi lần tăng `attempt`.")
     lines.append(
@@ -175,27 +176,114 @@ def render_report(metrics: MetricsReport) -> str:
     lines.append("## 7. Phần đã làm thêm (extension)")
     lines.append("")
     lines.append(
-        "1. **SQLite persistence** — mô tả ở mục 6, có test riêng chứng minh chứ không nói suông."
-    )
-    lines.append(
-        "2. **Sơ đồ graph tự động** — `graph.get_graph().draw_mermaid()` xuất sơ đồ thật từ "
-        "graph đã compile (xem bên dưới), không phải hình vẽ tay, nên sửa graph là sơ đồ tự "
-        "cập nhật theo."
-    )
-    lines.append(
-        "3. **LLM-as-judge cho `evaluate_node`, chạy chế độ cố vấn** — có gọi LLM thật để "
-        "chấm kết quả tool, ghi ý kiến vào event log (field `llm_judge_opinion`), nhưng "
-        "**không dùng để quyết định route**. Lý do: thử thật cho thấy dù `temperature=0`, LLM "
-        "vẫn không ổn định 100% — có lần khiến 1 scenario lẽ ra qua ngay bị retry oan. Route "
-        "quyết định bởi LLM đã là rủi ro chấp nhận được ở `classify_node` (đúng chủ đích đề "
-        "bài), không có lý do chấp nhận thêm rủi ro tương tự ở `evaluate_node`, nhất là khi "
-        "tool đang là mock, không có nội dung thật để LLM đánh giá cho chuẩn."
-    )
-    lines.append(
-        "4. **2 scenario tự soạn thêm** vào `data/sample/scenarios.jsonl`, để kiểm tra "
-        "classifier tổng quát hoá được chứ không chỉ đúng trên đúng 7 câu mẫu."
+        "Mỗi extension ghi rõ: baseline (trước khi làm), thay đổi, cách kiểm tra, evidence, "
+        "giới hạn còn lại — không extension nào đổi hành vi core (bounded retry, approval "
+        "gate, persistence contract, termination vẫn nguyên như mục 2/5/6)."
     )
     lines.append("")
+
+    lines.append("### 1. SQLite persistence")
+    lines.append("- Baseline: chỉ có `MemorySaver`, mất state khi tắt chương trình.")
+    lines.append(
+        "- Thay đổi: `persistence.py` thêm `CHECKPOINTER=sqlite`, lưu file SQLite chế độ WAL."
+    )
+    lines.append(
+        "- Cách kiểm tra: `tests/test_persistence.py`, chạy độc lập, không cần service ngoài "
+        "(file SQLite tạm trong `tmp_path` của pytest)."
+    )
+    lines.append(
+        "- Evidence: 2 test pass — 1 xác nhận nhiều checkpoint qua `get_state_history()`, 1 "
+        "giả lập crash bằng checkpointer/graph **mới** trỏ cùng file, đọc lại được state cũ."
+    )
+    lines.append(
+        "- Giới hạn: chưa làm Postgres (yêu cầu Docker Compose, cân nhắc không đáng vì làm CI "
+        "phụ thuộc service ngoài trong khi SQLite đã đủ chứng minh contract)."
+    )
+    lines.append("")
+
+    lines.append("### 2. Sơ đồ graph tự động (Mermaid)")
+    lines.append("- Baseline: không có sơ đồ, hoặc phải tự vẽ tay dễ lệch so với code thật.")
+    lines.append(
+        "- Thay đổi: `report.py::_render_graph_diagram()` gọi "
+        "`graph.get_graph().draw_mermaid()` trên graph đã compile thật, nhúng thẳng vào report."
+    )
+    lines.append("- Cách kiểm tra: đọc sơ đồ bên dưới, đối chiếu bằng mắt với mục 2 (kiến trúc).")
+    lines.append("- Evidence: sơ đồ Mermaid bên dưới — sinh lại mỗi lần chạy `run-scenarios`.")
+    lines.append(
+        "- Giới hạn: đối chiếu thủ công bằng mắt, chưa có test tự động so khớp sơ đồ với "
+        "target diagram bằng code."
+    )
+    lines.append("")
+
+    lines.append("### 3. LLM-as-judge cho `evaluate_node` — gate thật, có bọc an toàn")
+    lines.append(
+        "- Baseline: heuristic so chuỗi `\"ERROR\"` quyết định toàn bộ route (an toàn nhưng "
+        "chỉ đạt mức base score theo đề, không dùng LLM thật cho việc đánh giá)."
+    )
+    lines.append(
+        "- Thay đổi: với kết quả tool không có `ERROR`, LLM-as-judge (structured verdict + "
+        "reason) giờ **quyết định thật** `evaluation_result`, bọc bởi: (1) timeout "
+        "`JUDGE_TIMEOUT_SECONDS=8s` chạy trong thread pool riêng, không đợi lời gọi bị treo; "
+        "(2) cost guard `MAX_JUDGE_CALLS_PER_THREAD=3`, hết ngân sách thì tự chuyển heuristic "
+        "không gọi LLM nữa; (3) fallback về `\"success\"` khi timeout/lỗi provider, không bao "
+        "giờ để crash node. Case `ERROR` (lỗi giả lập rõ ràng) vẫn short-circuit bằng "
+        "heuristic, không tốn lời gọi LLM."
+    )
+    lines.append(
+        "- Cách kiểm tra: `tests/test_evaluate_judge.py`, 5 test — không cần API key thật, "
+        "`get_llm()` được monkeypatch bằng LLM giả (verdict tuỳ ý, hoặc cố tình chậm/lỗi) để "
+        "kiểm chứng đúng guard logic một cách nhanh và deterministic."
+    )
+    lines.append(
+        "- Evidence: 5/5 test pass, gồm cả test đo thời gian thực tế < 0.5s khi judge giả lập "
+        "chậm 0.5s (chứng minh timeout thật sự cắt ngang, không đợi). Chạy `run-scenarios` 3 "
+        "lần liên tiếp với judge thật cho kết quả giống hệt nhau (100% thành công, retry ổn "
+        "định) — xem mục 4."
+    )
+    lines.append(
+        "- Giới hạn: `MAX_JUDGE_CALLS_PER_THREAD`/`JUDGE_TIMEOUT_SECONDS` là hằng số cố định "
+        "trong code, chưa đọc từ config/env. Judge vẫn đang chấm nội dung tool giả lập "
+        "(template dựng sẵn), không phải dữ liệu thật — xem mục 8."
+    )
+    lines.append("")
+
+    lines.append("### 4. Streamlit UI")
+    lines.append(
+        "- Baseline: chỉ xem được kết quả qua JSON/log terminal, không trực quan cho demo."
+    )
+    lines.append(
+        "- Thay đổi: `demo_ui.py` (extra `pip install -e \".[demo]\"`) — nhập câu hỏi, gọi "
+        "thẳng graph thật (không mock), hiển thị route, từng bước (event trail), proposed "
+        "action, approval/rejection, và câu trả lời cuối."
+    )
+    lines.append(
+        "- Cách kiểm tra: `tests/test_demo_ui.py` dùng `streamlit.testing.v1.AppTest` — mô "
+        "phỏng nhập liệu + bấm nút mà không cần mở trình duyệt thật."
+    )
+    lines.append(
+        "- Evidence: 3 test pass — route `simple` hiển thị đúng, route `risky` hiển thị đúng "
+        "khối approval, và một test riêng quét toàn bộ nội dung render để xác nhận **không có "
+        "API key nào bị lộ ra UI** dù chương trình lỗi."
+    )
+    lines.append(
+        "- Giới hạn: chỉ chạy local (`streamlit run demo_ui.py`), không deploy public; dùng "
+        "`CHECKPOINTER=memory` nên không giữ lịch sử qua các lần chạy Streamlit khác nhau."
+    )
+    lines.append("")
+
+    lines.append("### 5. Scenario tự soạn thêm")
+    lines.append("- Baseline: chỉ có 7 scenario mẫu của đề.")
+    lines.append(
+        "- Thay đổi: thêm `S08_custom_risky_combo` (risky kết hợp 2 side effect) và "
+        "`S09_custom_vague` (missing_info mơ hồ hơn câu mẫu) vào `data/sample/scenarios.jsonl`."
+    )
+    lines.append("- Cách kiểm tra: `run-scenarios` chạy chung với 7 câu mẫu, không tách riêng.")
+    lines.append("- Evidence: cả 2 route đúng 100% trong bảng mục 4 (S08, S09).")
+    lines.append(
+        "- Giới hạn: chỉ 2 câu, chưa phủ hết các ca ưu tiên chồng chéo (vd vừa risky vừa error)."
+    )
+    lines.append("")
+
     lines.append("```mermaid")
     lines.append(_render_graph_diagram().strip())
     lines.append("```")
@@ -204,19 +292,20 @@ def render_report(metrics: MetricsReport) -> str:
     lines.append("## 8. Kế hoạch cải thiện")
     lines.append("")
     lines.append(
-        "**Ưu tiên số 1: thay tool giả (mock) bằng tool gọi API thật.** Cái này kéo theo cải "
-        "thiện luôn 2 chỗ khác cùng lúc: LLM-as-judge trong `evaluate_node` hiện phải chấm "
-        "điểm một chuỗi template dựng sẵn, không có nội dung thật để đánh giá cho chuẩn — có "
-        "tool thật thì mới an toàn để nâng từ \"chỉ cố vấn\" lên \"trực tiếp quyết định "
-        "route\" như mục 7 giải thích; và luồng risky-action-chờ-duyệt (mục 5, failure mode "
-        "2) cũng sẽ có kết quả hành động thật để duyệt, thay vì chỉ mô phỏng. Đây là thay đổi "
-        "đáng làm nhất vì nâng cấp cùng lúc 2 thành phần khác, không phải chỉ thêm 1 tính năng "
+        "**Ưu tiên số 1: thay tool giả (mock) bằng tool gọi API thật.** LLM-as-judge trong "
+        "`evaluate_node` (mục 7.3) giờ đã là gate thật, nhưng vẫn đang chấm nội dung tool giả "
+        "lập (template dựng sẵn giống nhau mỗi lần) — chưa phải bài toán đánh giá chất lượng "
+        "thật sự. Có tool thật thì judge mới thực sự có giá trị (chấm nội dung khác nhau thật "
+        "theo từng lần gọi), và luồng risky-action-chờ-duyệt (mục 5, failure mode 2) cũng sẽ "
+        "có kết quả hành động thật để duyệt thay vì chỉ mô phỏng. Đây là thay đổi đáng làm "
+        "nhất vì nâng cấp giá trị của 2 thành phần đã có sẵn, không phải chỉ thêm 1 tính năng "
         "riêng lẻ."
     )
     lines.append(
         "Việc phụ, làm sau: bật `LANGGRAPH_INTERRUPT=true` để có người duyệt thật thay vì "
-        "mock (code interrupt/resume có sẵn trong `approval_node`, chỉ thiếu UI cho reviewer), "
-        "và thêm Postgres checkpointer cho trường hợp chạy nhiều instance song song."
+        "mock (code interrupt/resume có sẵn trong `approval_node`, chỉ thiếu UI cho reviewer "
+        "và test end-to-end cho nhánh interrupt/resume thật), và thêm Postgres checkpointer "
+        "cho trường hợp chạy nhiều instance song song."
     )
     lines.append("")
 

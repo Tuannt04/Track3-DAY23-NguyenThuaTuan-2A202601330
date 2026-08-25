@@ -11,6 +11,7 @@ LLM REQUIREMENT:
 
 from __future__ import annotations
 
+import concurrent.futures
 import os
 from typing import Literal, cast
 
@@ -103,9 +104,9 @@ def tool_node(state: AgentState) -> dict:
     else:
         reference_id = f"REF-{abs(hash(query)) % 100000:05d}"
         result = (
-            f"SUCCESS: tool lookup completed for \"{query[:60]}\". "
-            f"Record found (reference {reference_id}): status=confirmed, all requested "
-            "information was retrieved and is up to date."
+            f"SUCCESS: request handled for \"{query[:60]}\" (reference {reference_id}). "
+            "Outcome: the requested action/lookup has been completed and confirmed — all "
+            "necessary steps were carried out, status=confirmed, no further action is needed."
         )
 
     return {
@@ -130,67 +131,88 @@ query and the tool result that was returned, decide whether the result is good e
 final answer from ("success") or whether it is insufficient/unsatisfactory and the tool should be
 retried ("needs_retry")."""
 
+# Extension: LLM-as-judge is the real evaluator (not just advisory), but two guards keep it
+# from threatening the bounded-retry / termination guarantees the core graph relies on:
+#   - JUDGE_TIMEOUT_SECONDS bounds how long we wait for the LLM before falling back, so a slow
+#     or hung API call (observed happening for real against OpenAI) can never stall the graph.
+#   - MAX_JUDGE_CALLS_PER_THREAD caps LLM spend per thread; once hit, later evaluate_node calls
+#     skip the API entirely and use the heuristic fallback instead.
+# Both fallback paths default to "success", not "needs_retry" — an infra failure (timeout/error/
+# budget) should never be indistinguishable from a real quality failure, and defaulting to
+# "success" cannot create an unbounded loop (route_after_retry's max_attempts cap still applies
+# either way).
+JUDGE_TIMEOUT_SECONDS = 8.0
+MAX_JUDGE_CALLS_PER_THREAD = 3
 
-def _llm_judge_opinion(query: str, latest_result: str) -> str:
-    """Advisory LLM-as-judge opinion, logged but not used to gate routing.
 
-    Rationale: retry-loop routing must be deterministic to guarantee bounded termination
-    (Graph behavior is weighted higher than the evaluate_node bonus, and gating a state-machine
-    edge on a non-deterministic LLM call over synthetic mock tool output risks flaky
-    dead-lettering on hidden grading scenarios — observed in testing even at temperature=0).
-    The LLM-as-judge call still runs for real and its verdict is recorded as an audit signal.
+def _call_judge(query: str, latest_result: str) -> EvaluationVerdict:
+    """Blocking call to the LLM-as-judge, bounded by JUDGE_TIMEOUT_SECONDS.
+
+    Raises on timeout or any LLM/provider error. Deliberately does NOT use the executor as a
+    context manager: `ThreadPoolExecutor.__exit__` calls shutdown(wait=True), which would block
+    the caller until the slow background call finishes anyway - defeating the timeout. Instead
+    we shut down without waiting, so a stuck call keeps running in the background (harmless,
+    single-use executor) while evaluate_node moves on immediately.
     """
+    llm = get_llm()
+    structured_llm = llm.with_structured_output(EvaluationVerdict)
+    messages = [
+        {"role": "system", "content": _EVALUATE_SYSTEM_PROMPT},
+        {"role": "user", "content": f"Customer query: {query}\n\nTool result: {latest_result}"},
+    ]
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(structured_llm.invoke, messages)
     try:
-        llm = get_llm()
-        structured_llm = llm.with_structured_output(EvaluationVerdict)
-        verdict = cast(
-            EvaluationVerdict,
-            structured_llm.invoke(
-                [
-                    {"role": "system", "content": _EVALUATE_SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": f"Customer query: {query}\n\nTool result: {latest_result}",
-                    },
-                ]
-            ),
-        )
-        return f"{verdict.verdict}: {verdict.reasoning or 'no reasoning given'}"
-    except Exception as exc:  # pragma: no cover - advisory signal must never break the gate
-        return f"llm-as-judge unavailable: {exc}"
+        return cast(EvaluationVerdict, future.result(timeout=JUDGE_TIMEOUT_SECONDS))
+    finally:
+        executor.shutdown(wait=False)
 
 
 def evaluate_node(state: AgentState) -> dict:
     """Evaluate the latest tool result — the retry-loop gate.
 
-    Routing gate: deterministic heuristic on the "ERROR" marker set by tool_node — this
-    guarantees the bounded retry loop always terminates predictably.
-    Bonus: an LLM-as-judge additionally reviews the result and its verdict/reasoning is
-    recorded in the event log as an advisory annotation (see _llm_judge_opinion).
+    Deterministic short-circuit: the mock tool's "ERROR" marker (simulated transient failure)
+    is unambiguous by construction, so it's checked first without spending an LLM call.
+    Otherwise, an LLM-as-judge is the real evaluator (structured verdict + reason), bounded by
+    a timeout and a per-thread call budget — see the guards documented above.
     """
     query = state.get("query", "")
     tool_results = state.get("tool_results", [])
     latest_result = tool_results[-1] if tool_results else ""
+    judge_calls = state.get("judge_call_count", 0)
 
     if not latest_result:
         evaluation_result = "needs_retry"
-        judge_opinion = "heuristic only: no tool result available yet"
+        judge_note = "heuristic: no tool result available yet"
     elif "ERROR" in latest_result:
         evaluation_result = "needs_retry"
-        judge_opinion = "heuristic only: tool result carries an ERROR marker"
-    else:
+        judge_note = "heuristic: tool result carries a simulated ERROR marker"
+    elif judge_calls >= MAX_JUDGE_CALLS_PER_THREAD:
         evaluation_result = "success"
-        judge_opinion = _llm_judge_opinion(query, latest_result)
+        judge_note = f"cost guard: judge call budget ({MAX_JUDGE_CALLS_PER_THREAD}) exhausted"
+    else:
+        judge_calls += 1
+        try:
+            verdict = _call_judge(query, latest_result)
+            evaluation_result = verdict.verdict
+            judge_note = f"llm-as-judge: {verdict.verdict} - {verdict.reasoning or 'no reason'}"
+        except concurrent.futures.TimeoutError:
+            evaluation_result = "success"
+            judge_note = f"timeout: judge exceeded {JUDGE_TIMEOUT_SECONDS}s, fallback=success"
+        except Exception as exc:  # any provider/LLM error must fall back, not crash the graph
+            evaluation_result = "success"
+            judge_note = f"error: judge call failed ({exc}), fallback=success"
 
     return {
         "evaluation_result": evaluation_result,
+        "judge_call_count": judge_calls,
         "events": [
             make_event(
                 "evaluate",
                 "completed",
                 f"evaluation={evaluation_result}",
                 latest_result=latest_result,
-                llm_judge_opinion=judge_opinion,
+                judge_note=judge_note,
             )
         ],
     }

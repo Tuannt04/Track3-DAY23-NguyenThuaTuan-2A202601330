@@ -40,7 +40,8 @@ Thumbs.db
 # Hidden grading — do NOT distribute to students
 data/grading/
 
-# Local demo tooling — used for prepping the live demo, not part of the submission
-demo_ui.py
+# Local-only demo tooling — used for prepping the live demo, not part of the submission
+# (demo_ui.py is a real extension now and IS pushed — see pyproject.toml's [demo] extra
+# and tests/test_demo_ui.py)
 demo_ask.py
 docs/DEMO_SCRIPT.md
