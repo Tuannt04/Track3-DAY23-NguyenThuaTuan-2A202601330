@@ -39,3 +39,8 @@ Thumbs.db
 
 # Hidden grading — do NOT distribute to students
 data/grading/
+
+# Local demo tooling — used for prepping the live demo, not part of the submission
+demo_ui.py
+demo_ask.py
+docs/DEMO_SCRIPT.md

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Annotated
 
@@ -33,8 +34,17 @@ def run_scenarios(
     for scenario in scenarios:
         state = initial_state(scenario)
         run_config = {"configurable": {"thread_id": state["thread_id"]}}
-        final_state = graph.invoke(state, config=run_config)
-        metrics.append(metric_from_state(final_state, scenario.expected_route.value, scenario.requires_approval))
+        started_at = time.perf_counter()
+        # LangGraph's .invoke() overloads don't line up cleanly with a plain TypedDict
+        # input + dict config under mypy's strict overload matching; runtime behavior is
+        # unaffected (exercised in every test run and the sample scenario run).
+        final_state = graph.invoke(state, config=run_config)  # type: ignore[call-overload]
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        metric = metric_from_state(
+            final_state, scenario.expected_route.value, scenario.requires_approval
+        )
+        metric.latency_ms = elapsed_ms
+        metrics.append(metric)
     report = summarize_metrics(metrics)
     write_metrics(report, output)
     if cfg.get("report_path"):
