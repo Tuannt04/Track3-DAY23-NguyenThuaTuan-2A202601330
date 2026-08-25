@@ -5,3 +5,5 @@
 {"id":"S05_error","query":"Timeout failure while processing request","expected_route":"error","requires_approval":false,"should_retry":true,"tags":["retry"]}
 {"id":"S06_delete","query":"Delete customer account after support verification","expected_route":"risky","requires_approval":true,"should_retry":false,"tags":["hitl","destructive"]}
 {"id":"S07_dead_letter","query":"System failure cannot recover after multiple attempts","expected_route":"error","requires_approval":false,"should_retry":true,"max_attempts":1,"tags":["dead_letter","retry"]}
+{"id":"S08_custom_risky_combo","query":"Please cancel order 456 and issue a refund to the customer","expected_route":"risky","requires_approval":true,"should_retry":false,"tags":["custom","risky","multi-side-effect"]}
+{"id":"S09_custom_vague","query":"Something is wrong with my account, please help","expected_route":"missing_info","requires_approval":false,"should_retry":false,"tags":["custom","clarification"]}
