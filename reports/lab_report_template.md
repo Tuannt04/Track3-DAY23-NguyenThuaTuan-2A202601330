@@ -2,9 +2,9 @@
 
 ## 1. Thông tin
 
-- Tên: Nguyen Thua Tuan (2A202601330)
+- Tên: Nguyễn Thừa Tuân (2A202601330)
 - Repo/commit: https://github.com/Tuannt04/Track3-DAY23-NguyenThuaTuan-2A202601330
-- Ngày: 2026-08-25
+- Ngày: 25-08-2026
 
 ## 2. Kiến trúc
 
